@@ -5,6 +5,14 @@ Automatically scrolls a web page with configurable speed and duration.
 
 import time
 import sys
+
+try:
+    import tkinter as tk
+    from tkinter import messagebox
+except Exception:  # pragma: no cover - tkinter may be unavailable on some systems
+    tk = None
+    messagebox = None
+
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -13,6 +21,196 @@ try:
     USE_WEBDRIVER_MANAGER = True
 except ImportError:
     USE_WEBDRIVER_MANAGER = False
+
+DEFAULT_URL = "https://www.example.com"
+DEFAULT_DURATION = 30
+DEFAULT_SCROLL_SPEED = 1
+
+
+def console_available():
+    """Return True if stdin is interactive and usable."""
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except Exception:
+        return False
+
+
+def _show_info_dialog(title, message):
+    """Display a message box if tkinter is available."""
+    if tk is None or messagebox is None:
+        return
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showinfo(title, message, parent=root)
+    root.destroy()
+
+
+def _parse_positive_int(value, default):
+    """Convert string to positive int, return default on failure."""
+    try:
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError
+        return parsed
+    except (TypeError, ValueError):
+        return default
+
+
+def collect_console_config(defaults):
+    """Prompt for configuration using the console."""
+    url = input("Enter the URL to scroll (or press Enter for default): ").strip()
+    if not url:
+        url = defaults["url"]
+        print(f"Using default URL: {url}")
+
+    print("\nScroll modes:")
+    print("1. Continuous scroll (default)")
+    print("2. Smooth scroll to bottom")
+    mode = input("Choose mode (1 or 2, default: 1): ").strip() or defaults["mode"]
+    if mode not in ("1", "2"):
+        mode = defaults["mode"]
+        print("Invalid choice. Using default mode (1).")
+
+    duration_input = input("Enter scroll duration in seconds (default: 30): ").strip()
+    duration = _parse_positive_int(duration_input, defaults["duration"])
+
+    scroll_speed = defaults["scroll_speed"]
+    if mode == "1":
+        speed_input = input("Enter scroll speed in pixels (default: 1): ").strip()
+        scroll_speed = _parse_positive_int(speed_input, defaults["scroll_speed"])
+
+    return {
+        "url": url,
+        "mode": mode,
+        "duration": duration,
+        "scroll_speed": scroll_speed,
+    }
+
+
+def show_gui_config_dialog(defaults):
+    """Prompt for configuration using a simple Tkinter dialog."""
+    if tk is None:
+        _show_info_dialog(
+            "Auto Page Scroll Bot",
+            "Graphical prompts are unavailable. Default settings will be used.",
+        )
+        return defaults.copy()
+
+    result = {"config": None}
+
+    root = tk.Tk()
+    root.title("Auto Page Scroll Bot - Settings")
+    root.resizable(False, False)
+    root.geometry("400x260")
+
+    url_var = tk.StringVar(value=defaults["url"])
+    mode_var = tk.StringVar(value=defaults["mode"])
+    duration_var = tk.StringVar(value=str(defaults["duration"]))
+    scroll_var = tk.StringVar(value=str(defaults["scroll_speed"]))
+    status_var = tk.StringVar(value="")
+
+    def submit():
+        url_value = url_var.get().strip() or defaults["url"]
+        selected_mode = mode_var.get()
+        duration_value = _parse_positive_int(duration_var.get(), 0)
+        if duration_value <= 0:
+            status_var.set("Duration must be a positive integer.")
+            return
+
+        scroll_value = defaults["scroll_speed"]
+        if selected_mode == "1":
+            scroll_value = _parse_positive_int(scroll_var.get(), 0)
+            if scroll_value <= 0:
+                status_var.set("Scroll speed must be a positive integer.")
+                return
+
+        result["config"] = {
+            "url": url_value,
+            "mode": selected_mode,
+            "duration": duration_value,
+            "scroll_speed": scroll_value,
+        }
+        root.destroy()
+
+    def cancel():
+        result["config"] = None
+        root.destroy()
+
+    def on_close():
+        cancel()
+
+    url_label = tk.Label(root, text="URL to scroll:")
+    url_entry = tk.Entry(root, textvariable=url_var, width=50)
+
+    mode_frame = tk.LabelFrame(root, text="Scroll mode")
+    tk.Radiobutton(mode_frame, text="Continuous", variable=mode_var, value="1").pack(anchor="w")
+    tk.Radiobutton(mode_frame, text="Smooth to bottom", variable=mode_var, value="2").pack(anchor="w")
+
+    duration_label = tk.Label(root, text="Duration (seconds):")
+    duration_entry = tk.Entry(root, textvariable=duration_var, width=10)
+
+    scroll_label = tk.Label(root, text="Scroll speed (pixels per iteration, mode 1):")
+    scroll_entry = tk.Entry(root, textvariable=scroll_var, width=10)
+
+    def handle_mode_change(*_):
+        state = "normal" if mode_var.get() == "1" else "disabled"
+        scroll_entry.configure(state=state)
+
+    mode_var.trace_add("write", handle_mode_change)
+    handle_mode_change()
+
+    button_frame = tk.Frame(root)
+    submit_btn = tk.Button(button_frame, text="Start", command=submit, width=12)
+    cancel_btn = tk.Button(button_frame, text="Cancel", command=cancel, width=12)
+
+    status_label = tk.Label(root, textvariable=status_var, fg="red")
+
+    url_label.pack(pady=(10, 0))
+    url_entry.pack(pady=2)
+    mode_frame.pack(fill="x", padx=10, pady=10)
+    duration_label.pack()
+    duration_entry.pack()
+    scroll_label.pack(pady=(10, 0))
+    scroll_entry.pack()
+    status_label.pack()
+    button_frame.pack(pady=10)
+    submit_btn.pack(side="left", padx=5)
+    cancel_btn.pack(side="right", padx=5)
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
+    root.mainloop()
+
+    return result["config"]
+
+
+def collect_user_config():
+    """Collect configuration based on available input methods."""
+    defaults = {
+        "url": DEFAULT_URL,
+        "mode": "1",
+        "duration": DEFAULT_DURATION,
+        "scroll_speed": DEFAULT_SCROLL_SPEED,
+    }
+
+    if console_available():
+        return collect_console_config(defaults)
+
+    config = show_gui_config_dialog(defaults)
+    if config is None:
+        _show_info_dialog("Auto Page Scroll Bot", "Configuration cancelled. The application will close.")
+    return config
+
+
+def notify_completion():
+    """Pause for user acknowledgement depending on environment."""
+    if console_available():
+        try:
+            input("Press Enter to close the browser...")
+        except RuntimeError:
+            # Fall back to GUI dialog if stdin becomes unavailable mid-run.
+            _show_info_dialog("Auto Page Scroll Bot", "Scrolling completed! Click OK to close the browser.")
+    else:
+        _show_info_dialog("Auto Page Scroll Bot", "Scrolling completed! Click OK to close the browser.")
 
 
 class AutoScrollBot:
@@ -156,28 +354,16 @@ def main():
     print("=" * 50)
     print("Auto Page Scroll Bot")
     print("=" * 50)
-    
-    # Get URL from user
-    url = input("Enter the URL to scroll (or press Enter for default): ").strip()
-    if not url:
-        url = "https://www.example.com"
-        print(f"Using default URL: {url}")
-    
-    # Get scroll mode
-    print("\nScroll modes:")
-    print("1. Continuous scroll (default)")
-    print("2. Smooth scroll to bottom")
-    mode = input("Choose mode (1 or 2, default: 1): ").strip() or "1"
-    
-    # Get duration
-    duration_input = input("Enter scroll duration in seconds (default: 30): ").strip()
-    duration = int(duration_input) if duration_input.isdigit() else 30
-    
-    # Get scroll speed (for continuous mode)
-    scroll_speed = 1
-    if mode == "1":
-        speed_input = input("Enter scroll speed in pixels (default: 1): ").strip()
-        scroll_speed = int(speed_input) if speed_input.isdigit() else 1
+
+    config = collect_user_config()
+    if not config:
+        print("No configuration provided. Exiting.")
+        return
+
+    url = config["url"]
+    mode = config["mode"]
+    duration = config["duration"]
+    scroll_speed = config["scroll_speed"]
     
     # Initialize bot
     bot = AutoScrollBot(headless=False)
@@ -196,7 +382,7 @@ def main():
             bot.scroll_page(scroll_speed=scroll_speed, duration=duration)
         
         print("\nScrolling completed!")
-        input("Press Enter to close the browser...")
+        notify_completion()
         
     except Exception as e:
         print(f"An error occurred: {e}")
