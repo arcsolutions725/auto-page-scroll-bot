@@ -100,8 +100,9 @@ def show_gui_config_dialog(defaults):
 
     root = tk.Tk()
     root.title("Auto Page Scroll Bot - Settings")
-    root.resizable(False, False)
-    root.geometry("400x260")
+    root.resizable(True, True)
+    root.minsize(420, 320)
+    root.configure(padx=10, pady=10)
 
     url_var = tk.StringVar(value=defaults["url"])
     mode_var = tk.StringVar(value=defaults["mode"])
@@ -274,7 +275,7 @@ class AutoScrollBot:
         print("Press Ctrl+C to stop early")
         
         start_time = time.time()
-        scroll_delta = scroll_speed if scroll_direction == 'down' else -scroll_speed
+        direction = 1 if scroll_direction == 'down' else -1
         
         try:
             while time.time() - start_time < duration:
@@ -282,21 +283,20 @@ class AutoScrollBot:
                 current_scroll = self.driver.execute_script("return window.pageYOffset;")
                 
                 # Scroll
+                scroll_delta = scroll_speed * direction
                 self.driver.execute_script(f"window.scrollBy(0, {scroll_delta});")
                 
-                # Check if we've reached the bottom (for downward scroll) or top (for upward scroll)
-                if scroll_direction == 'down':
-                    page_height = self.driver.execute_script("return document.body.scrollHeight;")
-                    window_height = self.driver.execute_script("return window.innerHeight;")
-                    if current_scroll + window_height >= page_height:
-                        print("Reached bottom of page. Scrolling back to top...")
-                        self.driver.execute_script("window.scrollTo(0, 0);")
-                        time.sleep(1)
-                else:
-                    if current_scroll <= 0:
-                        print("Reached top of page. Scrolling to bottom...")
-                        self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                        time.sleep(1)
+                # Check bounds and reverse direction when needed
+                page_height = self.driver.execute_script("return document.body.scrollHeight;")
+                window_height = self.driver.execute_script("return window.innerHeight;")
+                max_scroll = max(page_height - window_height, 0)
+
+                if direction == 1 and current_scroll >= max_scroll:
+                    direction = -1
+                    print("Reached bottom of page. Reversing to scroll up.")
+                elif direction == -1 and current_scroll <= 0:
+                    direction = 1
+                    print("Reached top of page. Reversing to scroll down.")
                 
                 time.sleep(0.01)  # Small delay for smooth scrolling
                 
