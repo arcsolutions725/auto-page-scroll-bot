@@ -25,6 +25,7 @@ except ImportError:
 DEFAULT_URL = "https://www.example.com"
 DEFAULT_DURATION = 30
 DEFAULT_SCROLL_SPEED = 1
+DEFAULT_RUN_FOREVER = False
 
 
 def console_available():
@@ -74,6 +75,9 @@ def collect_console_config(defaults):
     duration_input = input("Enter scroll duration in seconds (default: 30): ").strip()
     duration = _parse_positive_int(duration_input, defaults["duration"])
 
+    run_forever_input = input("Run indefinitely? (y/N): ").strip().lower()
+    run_forever = run_forever_input in ("y", "yes")
+
     scroll_speed = defaults["scroll_speed"]
     if mode == "1":
         speed_input = input("Enter scroll speed in pixels (default: 1): ").strip()
@@ -84,6 +88,7 @@ def collect_console_config(defaults):
         "mode": mode,
         "duration": duration,
         "scroll_speed": scroll_speed,
+        "run_forever": run_forever,
     }
 
 
@@ -101,22 +106,26 @@ def show_gui_config_dialog(defaults):
     root = tk.Tk()
     root.title("Auto Page Scroll Bot - Settings")
     root.resizable(True, True)
-    root.minsize(420, 320)
+    root.minsize(420, 340)
     root.configure(padx=10, pady=10)
 
     url_var = tk.StringVar(value=defaults["url"])
     mode_var = tk.StringVar(value=defaults["mode"])
     duration_var = tk.StringVar(value=str(defaults["duration"]))
     scroll_var = tk.StringVar(value=str(defaults["scroll_speed"]))
+    run_forever_var = tk.BooleanVar(value=defaults["run_forever"])
     status_var = tk.StringVar(value="")
 
     def submit():
         url_value = url_var.get().strip() or defaults["url"]
         selected_mode = mode_var.get()
-        duration_value = _parse_positive_int(duration_var.get(), 0)
-        if duration_value <= 0:
-            status_var.set("Duration must be a positive integer.")
-            return
+        if run_forever_var.get():
+            duration_value = defaults["duration"]
+        else:
+            duration_value = _parse_positive_int(duration_var.get(), 0)
+            if duration_value <= 0:
+                status_var.set("Duration must be a positive integer.")
+                return
 
         scroll_value = defaults["scroll_speed"]
         if selected_mode == "1":
@@ -130,6 +139,7 @@ def show_gui_config_dialog(defaults):
             "mode": selected_mode,
             "duration": duration_value,
             "scroll_speed": scroll_value,
+            "run_forever": run_forever_var.get(),
         }
         root.destroy()
 
@@ -153,12 +163,16 @@ def show_gui_config_dialog(defaults):
     scroll_label = tk.Label(root, text="Scroll speed (pixels per iteration, mode 1):")
     scroll_entry = tk.Entry(root, textvariable=scroll_var, width=10)
 
-    def handle_mode_change(*_):
-        state = "normal" if mode_var.get() == "1" else "disabled"
-        scroll_entry.configure(state=state)
+    def refresh_controls(*_):
+        mode_state = "normal" if mode_var.get() == "1" else "disabled"
+        scroll_entry.configure(state=mode_state)
 
-    mode_var.trace_add("write", handle_mode_change)
-    handle_mode_change()
+        duration_state = "disabled" if run_forever_var.get() else "normal"
+        duration_entry.configure(state=duration_state)
+
+    mode_var.trace_add("write", refresh_controls)
+    run_forever_var.trace_add("write", refresh_controls)
+    refresh_controls()
 
     button_frame = tk.Frame(root)
     submit_btn = tk.Button(button_frame, text="Start", command=submit, width=12)
@@ -171,6 +185,8 @@ def show_gui_config_dialog(defaults):
     mode_frame.pack(fill="x", padx=10, pady=10)
     duration_label.pack()
     duration_entry.pack()
+    run_forever_check = tk.Checkbutton(root, text="Loop forever", variable=run_forever_var)
+    run_forever_check.pack(pady=(5, 5))
     scroll_label.pack(pady=(10, 0))
     scroll_entry.pack()
     status_label.pack()
@@ -191,6 +207,7 @@ def collect_user_config():
         "mode": "1",
         "duration": DEFAULT_DURATION,
         "scroll_speed": DEFAULT_SCROLL_SPEED,
+        "run_forever": DEFAULT_RUN_FOREVER,
     }
 
     if console_available():
@@ -202,8 +219,10 @@ def collect_user_config():
     return config
 
 
-def notify_completion():
+def notify_completion(run_forever=False):
     """Pause for user acknowledgement depending on environment."""
+    if run_forever:
+        return
     if console_available():
         try:
             input("Press Enter to close the browser...")
@@ -256,29 +275,31 @@ class AutoScrollBot:
             print(f"Error navigating to URL: {e}")
             return False
     
-    def scroll_page(self, scroll_speed=1, duration=30, scroll_direction='down'):
+    def scroll_page(self, scroll_speed=1, duration=None, scroll_direction='down'):
         """
         Scroll the page automatically.
         
         Args:
             scroll_speed: Pixels to scroll per iteration (default: 1)
-            duration: Duration in seconds to scroll (default: 30)
+            duration: Duration in seconds to scroll (None for infinite)
             scroll_direction: 'down' or 'up' (default: 'down')
         """
         if not self.driver:
             print("Browser not started!")
             return
         
-        print(f"Starting auto-scroll for {duration} seconds...")
+        duration_text = f"{duration} seconds" if duration is not None else "indefinitely"
+        print(f"Starting auto-scroll for {duration_text}...")
         print(f"Scroll speed: {scroll_speed} pixels per iteration")
         print(f"Direction: {scroll_direction}")
         print("Press Ctrl+C to stop early")
         
         start_time = time.time()
+        end_time = None if duration is None else start_time + duration
         direction = 1 if scroll_direction == 'down' else -1
         
         try:
-            while time.time() - start_time < duration:
+            while duration is None or time.time() < end_time:
                 # Get current scroll position
                 current_scroll = self.driver.execute_script("return window.pageYOffset;")
                 
@@ -305,17 +326,20 @@ class AutoScrollBot:
         except Exception as e:
             print(f"Error during scrolling: {e}")
     
-    def smooth_scroll_to_bottom(self, duration=30):
+    def smooth_scroll_to_bottom(self, duration=None):
         """Smoothly scroll to the bottom of the page."""
         if not self.driver:
             print("Browser not started!")
             return
         
-        print(f"Smooth scrolling for {duration} seconds...")
+        duration_text = f"{duration} seconds" if duration is not None else "indefinitely"
+        print(f"Smooth scrolling for {duration_text}...")
         start_time = time.time()
+        end_time = None if duration is None else start_time + duration
+        cycle_duration = duration if duration else DEFAULT_DURATION
         
         try:
-            while time.time() - start_time < duration:
+            while duration is None or time.time() < end_time:
                 # Get page dimensions
                 page_height = self.driver.execute_script("return document.body.scrollHeight;")
                 window_height = self.driver.execute_script("return window.innerHeight;")
@@ -323,7 +347,7 @@ class AutoScrollBot:
                 
                 # Calculate scroll position based on elapsed time
                 elapsed = time.time() - start_time
-                progress = min(elapsed / duration, 1.0)
+                progress = min(elapsed / cycle_duration, 1.0) if cycle_duration else 1.0
                 target_scroll = (page_height - window_height) * progress
                 
                 # Smooth scroll to target
@@ -334,6 +358,8 @@ class AutoScrollBot:
                     print("Reached bottom. Restarting from top...")
                     self.driver.execute_script("window.scrollTo(0, 0);")
                     start_time = time.time()  # Reset timer
+                    if duration:
+                        end_time = start_time + duration
                 
                 time.sleep(0.05)
                 
@@ -362,8 +388,9 @@ def main():
 
     url = config["url"]
     mode = config["mode"]
-    duration = config["duration"]
     scroll_speed = config["scroll_speed"]
+    run_forever = config.get("run_forever", False)
+    duration = None if run_forever else config["duration"]
     
     # Initialize bot
     bot = AutoScrollBot(headless=False)
@@ -381,8 +408,9 @@ def main():
         else:
             bot.scroll_page(scroll_speed=scroll_speed, duration=duration)
         
-        print("\nScrolling completed!")
-        notify_completion()
+        if not run_forever:
+            print("\nScrolling completed!")
+            notify_completion(run_forever=False)
         
     except Exception as e:
         print(f"An error occurred: {e}")
